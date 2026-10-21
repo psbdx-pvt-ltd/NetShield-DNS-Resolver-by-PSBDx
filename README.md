@@ -41,8 +41,8 @@ Private, open source, and built in pure Java. No Firebase, no Google Play Servic
 
 [![Verified by VirusTotal](https://img.shields.io/badge/VirusTotal-verified-394EFF?style=for-the-badge&logo=virustotal&logoColor=white)](https://www.virustotal.com/gui/file/a85837898b21d4f6992103fbc83a55ab33abe3ea7a200a3fafb950879bee3a34/behavior)
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/91818854feaa4a3990a4d04ab50f589b?style=flat-square)](https://app.codacy.com/gh/m-farhan-hamim/NetShield-DNS-Resolver-by-PSBDx/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
-[![OpenSSF Scorecard](https://img.shields.io/badge/OpenSSF-Scorecard-blue?style=flat-square&logo=openssf)](https://securityscorecards.dev/viewer/?uri=github.com/m-farhan-hamim/NetShield-DNS-Resolver-by-PSBDx)
-[![Telegram Community](https://img.shields.io/badge/Telegram-Join%20Chat-blue?style=flat-square&logo=telegram)](https://t.me/psbdx_bd_comm)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/m-farhan-hamim/NetShield-DNS-Resolver-by-PSBDx/badge)](https://securityscorecards.dev/viewer/?uri=github.com/m-farhan-hamim/NetShield-DNS-Resolver-by-PSBDx)
+[![Telegram Community](https://img.shields.io/badge/Telegram-Join%20Community-blue?style=flat-square&logo=telegram)](https://t.me/psbdx_bd_comm)
 [![Available on F-Droid](https://img.shields.io/badge/F--Droid-available-1976D2?style=for-the-badge&logo=f-droid&logoColor=white)](https://f-droid.org/packages/com.netshield.dns.psbdx/)
 [![Get it on APKPure](https://img.shields.io/badge/APKPure-download-00B5A5?style=for-the-badge)](https://apkpure.com/p/com.netshield.dns.psbdx)
 [![GitHub Release](https://img.shields.io/github/v/release/m-farhan-hamim/NetShield-DNS-Resolver-by-PSBDx?style=for-the-badge&logo=github&label=GitHub)](https://github.com/m-farhan-hamim/NetShield-DNS-Resolver-by-PSBDx/releases/latest)
