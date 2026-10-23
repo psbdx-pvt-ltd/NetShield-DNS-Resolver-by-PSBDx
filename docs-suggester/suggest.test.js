@@ -131,3 +131,88 @@ test("speed: indexing + ranking 200 entries is far below a second", () => {
   S.rank(idx, "dns tls problem", "x ".repeat(500), syn);
   assert.ok(Date.now() - t < 1500, `took ${Date.now() - t} ms`);
 });
+
+/* ---------------------- wiki JSON API (real response shape) ---------------------- */
+const WH = ["wiki.psbdx.com"];
+const apiItems = S.parseEntries(fs.readFileSync(fx("wiki-api-sample.json"), "utf8"));
+const apiIndex = S.buildIndex(apiItems, syn);
+const apiSuggest = (t, b = "") => S.pick(S.rank(apiIndex, t, b, syn), WH);
+
+test("API: parses the real wiki response; tags and category become matchable terms", () => {
+  assert.equal(apiItems.length, 5);
+  assert.ok(apiItems.every((i) => i.link.startsWith("https://wiki.psbdx.com/wiki/")));
+  const t = apiItems.find((i) => /Troubleshooting/.test(i.title));
+  assert.ok(t.categories.includes("General Support") && t.categories.includes("EAI_NODATA"));
+  assert.equal(t.lang, "en");
+});
+
+test("API: real wiki questions find the right page", () => {
+  const cases = [
+    ["Getting UnknownHostException on mobile data", "the app shows EAI_NODATA and nothing resolves", "troubleshooting-guide"],
+    ["How do I make Orbot work in proxy mode only", "", "orbot-to-proxy-mode"],
+    ["v2rayNG SOCKS5 proxy only mode", "", "v2rayng-to-proxy-mode"],
+    ["InviZible Pro proxy mode setup", "", "invizible-pro-to-proxy-mode"],
+  ];
+  for (const [t, b, slug] of cases) {
+    const r = apiSuggest(t, b);
+    assert.ok(r.length >= 1, `no suggestion for: ${t}`);
+    assert.ok(r[0].item.link.includes(slug), `${t} -> ${r[0].item.link}`);
+  }
+});
+
+test("API: unrelated or generic issues stay silent", () => {
+  assert.deepEqual(apiSuggest("How do I bake sourdough bread", "flour water salt"), []);
+  assert.deepEqual(apiSuggest("proxy", ""), []);
+});
+
+test("API run(): works from a file and from a malformed body", async () => {
+  const r = await S.run({ feedUrl: "https://wiki.psbdx.com/api/v1/posts", feedFile: fx("wiki-api-sample.json"), title: "Orbot proxy mode only", body: "", user: "alice" });
+  assert.equal(r.status, "ok");
+  assert.equal(r.feed.items, 5);
+  fs.writeFileSync(path.join(__dirname, "fixtures", ".tmp-bad.json"), "{ not json");
+  const bad = await S.run({ feedUrl: "https://wiki.psbdx.com/api/v1/posts", feedFile: path.join(__dirname, "fixtures", ".tmp-bad.json"), title: "x", body: "" });
+  fs.unlinkSync(path.join(__dirname, "fixtures", ".tmp-bad.json"));
+  assert.equal(bad.status, "skipped");
+});
+
+function fakeApiFetch(all, perDefault, seen, pagesOverride) {
+  return async (url) => {
+    seen.push(String(url));
+    const u = new URL(url);
+    const page = Number(u.searchParams.get("page") || 1);
+    const per = Number(u.searchParams.get("per_page") || perDefault);
+    const slice = all.slice((page - 1) * per, page * per);
+    const res = new Response(JSON.stringify({ data: slice, meta: { page, per_page: per, total: all.length, pages: pagesOverride || Math.ceil(all.length / per) } }), { status: 200 });
+    Object.defineProperty(res, "url", { value: String(url) });
+    return res;
+  };
+}
+
+test("API pagination: follows meta.pages with the same page size, same host", async () => {
+  const all = JSON.parse(fs.readFileSync(fx("wiki-api-sample.json"), "utf8")).data;
+  const seen = [], realFetch = global.fetch;
+  global.fetch = fakeApiFetch(all, 2, seen);
+  try {
+    const r = await S.run({ feedUrl: "https://wiki.psbdx.com/api/v1/posts?per_page=2", title: "UnknownHostException", body: "EAI_NODATA nothing resolves" });
+    assert.equal(r.feed.items, 5);
+    assert.deepEqual(seen.map((s) => new URL(s).searchParams.get("page")), [null, "2", "3"]);
+    assert.ok(seen.every((s) => new URL(s).host === "wiki.psbdx.com"));
+  } finally { global.fetch = realFetch; }
+});
+
+test("API pagination: a huge meta.pages cannot make us fetch more than maxPages", async () => {
+  const all = JSON.parse(fs.readFileSync(fx("wiki-api-sample.json"), "utf8")).data;
+  const seen = [], realFetch = global.fetch;
+  global.fetch = fakeApiFetch(all, 1, seen, 99999);
+  try {
+    await S.run({ feedUrl: "https://wiki.psbdx.com/api/v1/posts?per_page=1", title: "x", body: "" });
+    assert.equal(seen.length, S.DEFAULTS.maxPages);
+  } finally { global.fetch = realFetch; }
+});
+
+test("title-coverage rule: one generic title word is not enough, a strong title match is", () => {
+  assert.deepEqual(suggest("fingerprint", ""), []);              // 1 shared word, weak title overlap
+  const r = apiSuggest("Orbot proxy mode only", "");              // 1 distinctive word + 4 shared title words
+  assert.ok(r.length >= 1 && r[0].item.link.includes("orbot-to-proxy-mode"));
+  assert.deepEqual(apiSuggest("proxy mode only", ""), []);        // no distinctive word: which app? stay silent
+});

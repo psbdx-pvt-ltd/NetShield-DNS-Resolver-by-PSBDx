@@ -23,6 +23,7 @@ const DEFAULTS = {
   timeoutMs: 10000,
   maxBytes: 2 * 1024 * 1024,
   maxItems: 200,
+  maxPages: 10,
   maxSuggestions: 2,
   minMatchedTerms: 2,
   minScore: 5,
@@ -111,6 +112,45 @@ function parseFeed(xml, opts = {}) {
   return items;
 }
 
+/* ------------------------- JSON API (wiki /api/v1/posts) ------------------ */
+
+// Maps {data:[{title,url,excerpt,category:{name},tags:[...],lang}], meta:{...}} to feed entries.
+// Tags are treated like categories, so error strings in tags (EAI_NODATA) help matching.
+function parseApiPosts(json, opts = {}) {
+  const o = { ...DEFAULTS, ...opts };
+  const list = Array.isArray(json) ? json : json && Array.isArray(json.data) ? json.data : [];
+  const items = [];
+  for (const p of list.slice(0, o.maxItems)) {
+    if (!p || typeof p !== "object") continue;
+    const title = stripHtml(String(p.title || ""));
+    const link = String(p.url || p.link || "").trim();
+    if (!title || !link) continue;
+    const cats = [];
+    if (p.category && p.category.name) cats.push(String(p.category.name));
+    if (Array.isArray(p.tags)) for (const t of p.tags) cats.push(String(t));
+    items.push({
+      title,
+      link,
+      summary: stripHtml(String(p.excerpt || p.summary || "")),
+      categories: cats.map(stripHtml).filter(Boolean),
+      content: stripHtml(String(p.content || "")).slice(0, o.contentChars),
+      lang: p.lang ? String(p.lang) : "",
+    });
+  }
+  return items;
+}
+
+// RSS/Atom (XML) or JSON API, decided by the first character.
+function parseEntries(text, opts = {}) {
+  const t = String(text);
+  if (/^\s*[\[{]/.test(t)) {
+    let json;
+    try { json = JSON.parse(t); } catch { return []; }
+    return parseApiPosts(json, opts);
+  }
+  return parseFeed(t, opts);
+}
+
 /* ------------------------------ links & escaping -------------------------- */
 
 function isAllowedLink(url, allowedHosts) {
@@ -181,9 +221,10 @@ function buildIndex(items, syn) {
     const shallow = new Set([
       ...terms(item.title, syn), ...terms(item.categories.join(" "), syn), ...terms(item.summary, syn),
     ]);
+    const titleSet = new Set(terms(item.title, syn));
     let len = 0;
     for (const v of tf.values()) len += v;
-    return { item, tf, len, shallow };
+    return { item, tf, len, shallow, titleSet };
   });
   const df = new Map();
   for (const d of docs) for (const t of d.tf.keys()) df.set(t, (df.get(t) || 0) + 1);
@@ -214,6 +255,8 @@ function rank(index, title, body, syn, opts = {}) {
   for (const d of index.docs) {
     let score = 0;
     const matched = [];
+    let titleHits = 0;
+    for (const t of q.keys()) if (d.titleSet.has(t)) titleHits++;
     for (const [t, qc] of q) {
       const f = d.tf.get(t);
       if (!f) continue;
@@ -223,7 +266,7 @@ function rank(index, title, body, syn, opts = {}) {
       score += part * (1 + Math.log(qc));
       if (dfv <= informativeMax && d.shallow.has(t)) matched.push(t);
     }
-    scored.push({ item: d.item, score, matched });
+    scored.push({ item: d.item, score, matched, titleHits, titleCov: d.titleSet.size ? titleHits / d.titleSet.size : 0 });
   }
   scored.sort((x, y) => y.score - x.score);
   return scored;
@@ -234,7 +277,11 @@ function pick(scored, allowedHosts, opts = {}) {
   const out = [];
   for (const s of scored) {
     if (!isAllowedLink(s.item.link, allowedHosts)) continue;
-    if (s.matched.length < o.minMatchedTerms || s.score < o.minScore) continue;
+    // Enough evidence = 2+ distinctive words, OR 1 distinctive word plus a strong title match
+    // (at least 2 shared title words covering half of the page title). The second rule is what
+    // lets "Orbot proxy mode only" find its page on a small wiki where "proxy"/"mode" are common.
+    const strongTitle = s.matched.length >= 1 && s.titleHits >= 2 && s.titleCov >= 0.5;
+    if ((s.matched.length < o.minMatchedTerms && !strongTitle) || s.score < o.minScore) continue;
     if (out.length && s.score < out[0].score * o.secondRatio) break;
     out.push(s);
     if (out.length >= o.maxSuggestions) break;
@@ -242,16 +289,21 @@ function pick(scored, allowedHosts, opts = {}) {
   return out;
 }
 
-function buildComment(suggestions, user) {
+function buildComment(suggestions, user, extra = {}) {
   const who = user ? `@${String(user).replace(/[^A-Za-z0-9-]/g, "")}` : "there";
   const lines = suggestions.map((s, i) => `${i + 1}. [${escapeMd(s.item.title)}](${s.item.link}) (matched: ${s.matched.slice(0, 4).map(escapeMd).join(", ")})`);
+  // optional one-line intro written by the small AI model (already validated; stripped again here)
+  const intro = extra.intro ? String(extra.intro).replace(/[<>`\[\]|*#@]/g, "").replace(/\s+/g, " ").trim() : "";
+  const note = extra.modelNote ? String(extra.modelNote).replace(/[<>`\[\]|*#@]/g, "").trim() : "";
   return [
     MARKER,
     `📚 **These docs may help, ${who}:**`,
     "",
+    ...(intro ? [intro, ""] : []),
     ...lines,
     "",
     "_I match keywords automatically, so I can be wrong. If these don't help, the maintainer will take a look._",
+    ...(note ? ["", `_${note}_`] : []),
   ].join("\n");
 }
 
@@ -266,7 +318,7 @@ async function fetchFeed(url, o) {
     redirect: "follow",
   });
   if (!res.ok) throw new Error(`feed returned HTTP ${res.status}`);
-  if (new URL(res.url).protocol !== "https:") throw new Error("feed redirected to a non-https URL");
+  if (res.url && new URL(res.url).protocol !== "https:") throw new Error("feed redirected to a non-https URL");
   const reader = res.body.getReader();
   const chunks = [];
   let total = 0;
@@ -278,6 +330,25 @@ async function fetchFeed(url, o) {
     chunks.push(value);
   }
   return { xml: Buffer.concat(chunks).toString("utf8"), bytes: total };
+}
+
+// JSON APIs only: follow meta.pages (capped), same host, same page size as page 1.
+async function fetchMorePages(url, firstText, o) {
+  let meta;
+  try { meta = JSON.parse(firstText).meta; } catch { return { items: [], bytes: 0 }; }
+  if (!meta || !(Number(meta.pages) > 1)) return { items: [], bytes: 0 };
+  const items = [];
+  let bytes = 0;
+  const last = Math.min(Number(meta.pages), o.maxPages);
+  for (let page = 2; page <= last; page++) {
+    const u = new URL(url);
+    u.searchParams.set("page", String(page));
+    if (meta.per_page) u.searchParams.set("per_page", String(meta.per_page));
+    const f = await fetchFeed(u.toString(), o);
+    items.push(...parseEntries(f.xml, o));
+    bytes += f.bytes;
+  }
+  return { items, bytes };
 }
 
 /* ------------------------------------ run --------------------------------- */
@@ -293,12 +364,17 @@ async function run(input) {
 
     const t1 = performance.now();
     let xml;
+    let more = { items: [], bytes: 0 };
     if (o.feedFile) { xml = fs.readFileSync(o.feedFile, "utf8"); result.feed.bytes = Buffer.byteLength(xml); }
-    else { const f = await fetchFeed(o.feedUrl, o); xml = f.xml; result.feed.bytes = f.bytes; }
+    else {
+      const f = await fetchFeed(o.feedUrl, o); xml = f.xml; result.feed.bytes = f.bytes;
+      more = await fetchMorePages(o.feedUrl, xml, o);
+      result.feed.bytes += more.bytes;
+    }
     timings.fetchMs = Math.round(performance.now() - t1);
 
     const t2 = performance.now();
-    const items = parseFeed(xml, o);
+    const items = parseEntries(xml, o).concat(more.items).slice(0, o.maxItems);
     result.feed.items = items.length;
     if (!items.length) { result.reason = "feed had no readable entries"; return finish(result, t0, o); }
     const syn = loadSynonyms(o.synonymsFile || path.join(__dirname, "synonyms.json"));
@@ -309,7 +385,7 @@ async function run(input) {
     const scored = rank(index, o.title, o.body, syn, o);
     const chosen = pick(scored, allowedHosts, o);
     timings.matchMs = Math.round(performance.now() - t3);
-    result.top = scored.slice(0, 3).map((s) => ({ title: s.item.title, score: +s.score.toFixed(2), matched: s.matched }));
+    result.top = scored.slice(0, 3).map((s) => ({ title: s.item.title, score: +s.score.toFixed(2), matched: s.matched, titleCov: +s.titleCov.toFixed(2) }));
 
     if (!chosen.length) { result.status = "no-match"; result.reason = "nothing above the confidence threshold, staying silent"; return finish(result, t0, o); }
     result.status = "ok";
@@ -388,4 +464,4 @@ async function main() {
 
 if (require.main === module) main().catch((e) => { console.log(`::warning::docs suggester crashed: ${e && e.message}`); process.exit(0); });
 
-module.exports = { parseFeed, buildIndex, rank, pick, buildComment, isAllowedLink, escapeMd, cleanIssueText, loadSynonyms, terms, run, summaryMarkdown, MARKER, DEFAULTS };
+module.exports = { parseApiPosts, parseEntries, parseFeed, buildIndex, rank, pick, buildComment, isAllowedLink, escapeMd, cleanIssueText, loadSynonyms, terms, run, summaryMarkdown, MARKER, DEFAULTS };
