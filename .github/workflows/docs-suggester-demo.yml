@@ -1,0 +1,81 @@
+name: Docs Suggester (Demo)
+
+# Demo of "suggest documentation from an RSS feed". It is a SEPARATE job on
+# purpose: the fast issue-filter job (form checks, version question) is not
+# touched, so it keeps replying at its normal speed. This one posts a second
+# comment when it is done, and it can fail or time out without hurting anything.
+#
+# Triggers
+#   push (branch demo/docs-suggester)  runs the tests + a live-feed check
+#   workflow_dispatch                  same, with your own title/body/feed (default branch only)
+#   issues opened                      posts the real comment (needs Issues enabled)
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "Issue title to test with"
+        default: "Cloudflare WAF protections against php2shell vulnerability"
+      body:
+        description: "Issue body to test with"
+        default: "Do the managed rules cover the php2shell exploit?"
+      feed_url:
+        description: "RSS/Atom feed (https only)"
+        default: "https://blog.cloudflare.com/rss/"
+  push:
+    branches: ["demo/docs-suggester"]
+    paths:
+      - "docs-suggester/**"
+      - ".github/workflows/docs-suggester-demo.yml"
+  issues:
+    types: [opened]
+
+concurrency:
+  group: docs-suggester-${{ github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  suggest:
+    name: Suggest docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: docs-suggester
+
+      - name: Unit tests
+        if: github.event_name != 'issues'   # skipped for real issues to stay fast
+        run: node --version && node --test docs-suggester/suggest.test.js
+
+      - name: Suggest docs
+        # Issue text goes in through env vars only, never into the shell script.
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title || inputs.title || 'Cloudflare WAF protections against php2shell vulnerability' }}
+          ISSUE_BODY: ${{ github.event.issue.body || inputs.body || 'Do the managed rules cover the php2shell exploit?' }}
+          ISSUE_USER: ${{ github.event.issue.user.login || github.actor }}
+          ISSUE_CREATED_AT: ${{ github.event.issue.created_at }}
+          FEED_URL: ${{ inputs.feed_url || vars.DOCS_FEED_URL || 'https://blog.cloudflare.com/rss/' }}
+        run: node docs-suggester/suggest.js --json-out result.json --md-out comment.md --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Post comment (real issues only)
+        if: github.event_name == 'issues' && hashFiles('comment.md') != ''
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require("fs");
+            const body = fs.readFileSync("comment.md", "utf8");
+            const marker = "<!-- netshield-bot:docs -->";
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+            if (comments.some((c) => c.body && c.body.includes(marker))) {
+              core.info("Docs suggestion already posted, skipping.");
+              return;
+            }
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
