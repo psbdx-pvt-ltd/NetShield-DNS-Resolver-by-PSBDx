@@ -81,7 +81,9 @@ function validateIntro(raw, ctx) {
   if (t.length < 15) return bad("too short");
   if (t.length > 300) return bad("too long");
 
-  const ground = `${ctx.title}\n${ctx.body}\n${(ctx.suggestions || []).map((s) => s.title).join("\n")}`.toLowerCase();
+  // Only the user's own words count as evidence. Page titles are deliberately NOT included:
+  // otherwise the model could repeat page names back as if the user had said them.
+  const ground = `${ctx.title}\n${ctx.body}`.toLowerCase();
   for (const n of t.match(/\d+/g) || []) if (!ground.includes(n)) return bad(`number "${n}" is not in the issue (possible invention)`);
   if (/\b(the user|the reporter|the author|the person|they|their|theirs)\b/i.test(t)) return bad("talks about the user in the third person");
   const words = (t.toLowerCase().match(/[a-z]{4,}/g) || []).filter((w) => !COMMON.has(w));
@@ -96,7 +98,9 @@ function validateIntro(raw, ctx) {
 function restoreCase(text, source) {
   const map = new Map();
   for (const w of String(source).match(/[A-Za-z0-9_]{4,}/g) || []) {
-    if (/[A-Z]/.test(w) && w !== w.toLowerCase() && !map.has(w.toLowerCase())) map.set(w.toLowerCase(), w);
+    const camel = /[a-z]/.test(w) && /[A-Z]/.test(w.slice(1));            // UnknownHostException, v2rayNG, InviZible
+    const code = !/[a-z]/.test(w) && /[A-Z]/.test(w) && /[_0-9]/.test(w);  // EAI_NODATA (not shouted words like ORBOT)
+    if ((camel || code) && !map.has(w.toLowerCase())) map.set(w.toLowerCase(), w);
   }
   return String(text).replace(/[A-Za-z0-9_]+/g, (t) => (map.has(t.toLowerCase()) ? map.get(t.toLowerCase()) : t));
 }

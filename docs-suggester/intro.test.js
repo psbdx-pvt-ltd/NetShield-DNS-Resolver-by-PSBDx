@@ -12,14 +12,14 @@ const CTX = {
 const ok = (t) => I.validateIntro(t, CTX);
 
 test("accepts a clean, grounded intro", () => {
-  const r = ok("Sorry to hear the app shows EAI_NODATA on mobile data. The troubleshooting guide below may help.");
+  const r = ok("It sounds like you're seeing EAI_NODATA on mobile data. The pages below may help.");
   assert.ok(r.ok, r.reason);
 });
 
 test("keeps only the first two sentences", () => {
-  const r = ok("That EAI_NODATA error is annoying. The guide below may help. Also try many other things. And more.");
-  assert.ok(r.ok);
-  assert.equal(r.text, "That EAI_NODATA error is annoying. The guide below may help.");
+  const r = ok("Your EAI_NODATA error on mobile data is annoying. The pages below may help. Also try many other things. And more.");
+  assert.ok(r.ok, r.reason);
+  assert.equal(r.text, "Your EAI_NODATA error on mobile data is annoying. The pages below may help.");
 });
 
 test("rejects links, domains, pings and markdown", () => {
@@ -95,9 +95,9 @@ test("REGRESSION: a domain that sentence-splitting used to drop is still rejecte
 });
 
 test("accepted text has single spaces and complete sentences only", () => {
-  const r = ok("That EAI_NODATA error is annoying.   The guide below may help.   And a cut off frag");
-  assert.ok(r.ok);
-  assert.equal(r.text, "That EAI_NODATA error is annoying. The guide below may help.");
+  const r = ok("Your EAI_NODATA error on mobile data is annoying.   The pages below may help.   And a cut off frag");
+  assert.ok(r.ok, r.reason);
+  assert.equal(r.text, "Your EAI_NODATA error on mobile data is annoying. The pages below may help.");
 });
 
 /* ---------------- the whole personalize step, offline (no model) ---------------- */
@@ -186,4 +186,37 @@ test("restoreCase puts back the casing the user used, and leaves other words alo
                "It sounds like you're experiencing UnknownHostException on your mobile device.");
   assert.equal(I.restoreCase("it shows eai_nodata again", src), "it shows EAI_NODATA again");
   assert.equal(I.restoreCase("Nothing changes here", "plain lowercase issue text"), "Nothing changes here");
+});
+
+/* ---------------- regressions from the REAL 9-issue model comparison ---------------- */
+test("REGRESSION: restoreCase must not capitalise sentence-start words or shouted words", () => {
+  assert.equal(I.restoreCase("It sounds like you're getting an error.", "Getting UnknownHostException on mobile data"), "It sounds like you're getting an error.");
+  assert.equal(I.restoreCase("It sounds like you're trying to switch.", "Trying to use it"), "It sounds like you're trying to switch.");
+  assert.equal(I.restoreCase("you're frustrated with your Orbot.", "WHY DOES ORBOT NOT WORK???"), "you're frustrated with your Orbot.");
+  assert.equal(I.restoreCase("see unknownhostexception and eai_nodata", "UnknownHostException EAI_NODATA"), "see UnknownHostException and EAI_NODATA");
+  assert.equal(I.restoreCase("using v2rayng with invizible", "v2rayNG and InviZible"), "using v2rayNG with InviZible");
+});
+
+test("REGRESSION: page titles do not count as 'said by the user' (real Qwen invention of InviZible)", () => {
+  const ctx = {
+    title: "v2rayNG SOCKS5 proxy only mode not connecting",
+    body: "I followed the steps for v2rayNG but the connection keeps timing out when NetShield is set to proxy mode.",
+    suggestions: [{ title: "How to Switch v2rayNG to Proxy Mode Only" }, { title: "How to Switch InviZible Pro to Proxy Mode Only" }],
+  };
+  const real = I.composeIntro(" trying to switch between v2ray NG and Invizible Proxy modes.");
+  assert.equal(I.validateIntro(real, ctx).ok, false);
+});
+
+test("real accepted outputs that are faithful still pass under the stricter grounding", () => {
+  const orbot = { title: "How do I make Orbot work in proxy mode only", body: "I installed Orbot on Android 13 and want NetShield to use it as a SOCKS proxy but I do not see where to set it up.", suggestions: [] };
+  assert.ok(I.validateIntro(I.composeIntro(" trying to switch Orbot to proxy mode only."), orbot).ok);
+  assert.ok(I.validateIntro(I.composeIntro(" interested in setting up Orbot as a SOCKS proxy."), orbot).ok);
+  const shout = { title: "WHY DOES ORBOT NOT WORK???", body: "I AM SO ANGRY. I tried Orbot proxy mode only and NOTHING WORKS.", suggestions: [] };
+  assert.ok(I.validateIntro(I.composeIntro(" frustrated with your Orbot."), shout).ok);
+});
+
+test("REGRESSION: a fabricated URL and a vague invented summary from the real 135M run are rejected", () => {
+  const ctx = { title: "How do I make Orbot work in proxy mode only", body: "I installed Orbot on Android 13 and want NetShield to use it as a SOCKS proxy.", suggestions: [] };
+  assert.equal(I.composeIntro(" trying to switch to a different version of the same application. You can try switching by following this link: https://www.orobot-socsonlines.com/e"), "It sounds like you're trying to switch to a different version of the same application. The pages below may help.");
+  assert.equal(I.validateIntro(I.composeIntro(" trying to switch to a different version of the same application."), ctx).ok, false);
 });

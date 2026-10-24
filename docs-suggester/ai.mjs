@@ -22,7 +22,7 @@ export async function writeIntro(generator, { title, body, suggestions }, maxMs 
   let timer;
   try {
     const gen = await Promise.race([
-      generator(prompt, { max_new_tokens: 48, do_sample: false, repetition_penalty: 1.1, return_full_text: false }),
+      generator(prompt, { max_new_tokens: 48, min_new_tokens: 4, do_sample: false, repetition_penalty: 1.1, return_full_text: false }),
       new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`generation took longer than ${maxMs / 1000}s`)), maxMs); }),
     ]);
     let cont = String((gen && gen[0] && gen[0].generated_text) || "");
