@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
+import { loadGenerator, writeIntro, judge } from "./ai.mjs";
 
 const require = createRequire(import.meta.url);
 const intro = require("./intro.js");
@@ -68,33 +69,18 @@ function finish() {
     const gate = intro.shouldTryAi(title, bodyPart);
     if (!gate.ok) { out.used = "skipped"; out.reason = gate.reason; return finish(); }
 
+    const ctx = { title, body: bodyPart, suggestions: result.suggestions };
     if (env.AI_FAKE_OUTPUT !== undefined) {
       out.raw = env.AI_FAKE_OUTPUT; // test hook, no model
     } else {
-      const tLoad = performance.now();
-      const { pipeline, env: tf } = await import("@huggingface/transformers");
-      tf.cacheDir = env.HF_CACHE_DIR || "./.hf-cache";
-      tf.allowLocalModels = false;
-      const generator = await pipeline("text-generation", MODEL, { dtype: DTYPE });
-      out.timings.loadMs = Math.round(performance.now() - tLoad);
-
-      const messages = intro.buildMessages(title, bodyPart, result.suggestions);
-      // the code writes the opening; the model only continues it
-      const prompt = generator.tokenizer.apply_chat_template(messages, { tokenize: false, add_generation_prompt: true }) + intro.PREFIX;
-      const tGen = performance.now();
-      const gen = await Promise.race([
-        generator(prompt, { max_new_tokens: 48, do_sample: false, repetition_penalty: 1.1, return_full_text: false }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error(`generation took longer than ${MAX_GEN_MS / 1000}s`)), MAX_GEN_MS)),
-      ]);
-      out.timings.genMs = Math.round(performance.now() - tGen);
-      let cont = String((gen && gen[0] && gen[0].generated_text) || "");
-      if (cont.startsWith(prompt)) cont = cont.slice(prompt.length);
-      out.raw = cont;
+      const { generator, loadMs } = await loadGenerator(MODEL, DTYPE, env.HF_CACHE_DIR);
+      out.timings.loadMs = loadMs;
+      const g = await writeIntro(generator, ctx, MAX_GEN_MS);
+      out.raw = g.raw;
+      out.timings.genMs = g.genMs;
     }
 
-    const composed = intro.composeIntro(out.raw);
-    if (!composed) { out.used = "fallback"; out.reason = "output rejected: no complete sentence (output was cut off or contained a glued domain)"; return finish(); }
-    const verdict = intro.validateIntro(composed, { title, body: bodyPart, suggestions: result.suggestions });
+    const verdict = judge(out.raw, ctx);
     if (!verdict.ok) { out.used = "fallback"; out.reason = `output rejected: ${verdict.reason}`; return finish(); }
 
     out.used = "ai";

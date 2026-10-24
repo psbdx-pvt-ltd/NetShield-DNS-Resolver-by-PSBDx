@@ -92,4 +92,13 @@ function validateIntro(raw, ctx) {
   return { ok: true, text: t, reason: "" };
 }
 
-module.exports = { shouldTryAi, buildMessages, validateIntro, letterStats, composeIntro, PREFIX, CLOSING };
+// Small models often lowercase identifiers ("unknownhostexception"). Put back the casing the user used.
+function restoreCase(text, source) {
+  const map = new Map();
+  for (const w of String(source).match(/[A-Za-z0-9_]{4,}/g) || []) {
+    if (/[A-Z]/.test(w) && w !== w.toLowerCase() && !map.has(w.toLowerCase())) map.set(w.toLowerCase(), w);
+  }
+  return String(text).replace(/[A-Za-z0-9_]+/g, (t) => (map.has(t.toLowerCase()) ? map.get(t.toLowerCase()) : t));
+}
+
+module.exports = { restoreCase, shouldTryAi, buildMessages, validateIntro, letterStats, composeIntro, PREFIX, CLOSING };

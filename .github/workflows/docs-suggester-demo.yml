@@ -162,6 +162,14 @@ jobs:
           HF_CACHE_DIR: ${{ github.workspace }}/docs-suggester/.hf-cache
         run: node docs-suggester/personalize.mjs suggestion/result.json --out ai.json --md-out comment-ai.md --summary "$GITHUB_STEP_SUMMARY"
 
+      - name: Compare on 9 sample issues (demo runs only)
+        if: github.event_name != 'issues'
+        env:
+          AI_MODEL: ${{ matrix.model }}
+          AI_DTYPE: q8
+          HF_CACHE_DIR: ${{ github.workspace }}/docs-suggester/.hf-cache
+        run: node docs-suggester/eval.mjs docs-suggester/eval-issues.json --summary "$GITHUB_STEP_SUMMARY"
+
       - name: Replace the plain comment with the AI version (real issues only)
         if: github.event_name == 'issues' && hashFiles('comment-ai.md') != ''
         uses: actions/github-script@v8

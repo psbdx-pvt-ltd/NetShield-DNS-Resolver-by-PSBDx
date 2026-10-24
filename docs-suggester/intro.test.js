@@ -179,3 +179,11 @@ test("grounding: invented details are rejected, restating the issue is accepted"
   assert.equal(I.validateIntro(I.composeIntro(" using a corporate firewall with custom certificates installed."), ctx).ok, false);
   assert.ok(I.validateIntro(I.composeIntro(" having trouble because the app shows EAI_NODATA on mobile data."), ctx).ok);
 });
+
+test("restoreCase puts back the casing the user used, and leaves other words alone", () => {
+  const src = "Getting UnknownHostException on mobile data. EAI_NODATA appears.";
+  assert.equal(I.restoreCase("It sounds like you're experiencing unknownhostexception on your mobile device.", src),
+               "It sounds like you're experiencing UnknownHostException on your mobile device.");
+  assert.equal(I.restoreCase("it shows eai_nodata again", src), "it shows EAI_NODATA again");
+  assert.equal(I.restoreCase("Nothing changes here", "plain lowercase issue text"), "Nothing changes here");
+});
