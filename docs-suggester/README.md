@@ -1,99 +1,129 @@
 # Docs suggester (demo)
 
-When someone opens an issue, find the most relevant page from a **documentation
-RSS/Atom feed** and suggest it in a comment. No AI model, no API key, no cost,
-no dependencies: plain Node.js (18+).
+When someone opens an issue, find the most relevant wiki page and suggest it in a comment.
+A very small open AI model can then add one personalised intro line. No paid API, no key,
+and the model never runs on a phone: only on GitHub's runners.
 
-This is a demo. It points at the Cloudflare blog feed (`https://blog.cloudflare.com/rss/`)
-only because it is a public feed that is always available. Point it at your wiki feed
-when that exists (see "Use your own feed").
-
-## How it works
+## The two jobs
 
 ```
 issue opened
    |
-   +--> fast job (existing issue-filter): form checks, version question   <- untouched
+   +--> issue-filter (existing): form checks, version question        <- untouched
    |
-   +--> this job (separate, parallel, 3 min timeout):
-          1. download the feed (https only, 10 s timeout, 2 MB cap)
-          2. read RSS or Atom entries (title, summary, categories, start of content)
-          3. score every entry against the issue with BM25 keyword matching
-             (title boost, light stemming, synonyms from synonyms.json)
-          4. only if the match is strong: post "These docs may help" with 1-2 links
-          5. otherwise stay silent
+   +--> suggest  (about 10 s)  keyword matching on the wiki API, posts the plain suggestion
+   |        |
+   |        +--> personalize (slower, separate)  tiny model writes ONE intro line,
+   |                                              the same comment is edited to include it
 ```
 
-A wrong hint looks worse than no hint, so it stays silent unless **at least 2
-informative terms match** in the entry's title, tags or summary **and** the score
-passes a threshold. Matched terms are printed so you can see why it chose a page.
+The plain comment is already useful and appears first. The AI line is a bonus: if the
+model fails, is too slow, or writes something that fails the checks, the plain comment
+simply stays as it is.
 
-## Safety
+## Where the pages come from
 
-- Feed content and issue text are both untrusted.
-- Links are only posted if they are `https` and on the feed's own host
-  (or hosts listed in `DOCS_ALLOWED_HOSTS`, comma separated). Look-alike hosts
-  (`wiki.example.org.evil.net`), `http:` and `javascript:` links are rejected.
-- Titles are escaped: no `@mentions`, no markdown or HTML injection.
-- Issue text never goes into a URL or a shell command (it reaches the script
-  through environment variables only).
-- It can never fail the job: any problem (feed down, bad XML, timeout) becomes
-  status `skipped` with a warning, and nothing is posted.
+- **Wiki API:** `https://wiki.psbdx.com/api/v1/posts` (JSON, pages followed via `meta.pages`,
+  same host only, at most 10 pages). `tags` and `category` are matched like keywords, so put
+  error strings in tags (`EAI_NODATA`, `UnknownHostException`).
+- **RSS / Atom** feeds work too (the first demo used the Cloudflare blog feed).
+- Set the source with the repo variable `DOCS_FEED_URL`.
+
+## How a page is chosen (no AI)
+
+BM25 keyword scoring with a title boost, light stemming and `synonyms.json`. It stays silent
+unless there is enough evidence: **2 distinctive words match, or 1 distinctive word plus a strong
+title match** (at least 2 shared title words covering half of the page title). That second rule is
+what lets "Orbot proxy mode only" find its page on a small wiki where "proxy" and "mode" are common.
+Generic questions ("proxy mode only", "app not working") get no suggestion on purpose.
+
+`synonyms.json` needs care: ambiguous words create false matches. "hot", "power", "charge" and
+"language" all matched unrelated posts during testing and were removed.
+
+## What the AI does, and what it is not allowed to do
+
+The model only finishes one clause. The code writes everything else:
+
+```
+It sounds like you're <one clause from the model>. The pages below may help.
+ ^ fixed opening, always second person                ^ fixed closing
+```
+
+Links, titles and matched terms always come from code. The model's text is untrusted and is
+thrown away unless **all** of these pass (see `intro.js`, covered by tests):
+
+- no markup, `@mentions`, links, domains, commands or risky wording (checked on the whole output first)
+- one complete sentence, not cut off, within a length limit
+- no number that is not in the issue
+- no third person ("the user", "they")
+- at least half of its content words appear in **the user's own text** (page titles do not count,
+  otherwise a model can repeat page names back as if the user said them)
+- the issue is mostly Latin script (the tiny model writes poorly in Bengali, so it is skipped)
+
+Identifiers get their casing back (`unknownhostexception` -> `UnknownHostException`).
+The comment says that a small AI model wrote the intro line, and names the model.
+
+## Which model (real GitHub runs, 7 issues the matcher answered)
+
+| Model (8-bit) | Size | Accepted | Notes |
+|---|---|---|---|
+| **SmolLM2-360M-Instruct** (default) | 365 MB | **6 / 7** | 5 accurate, 1 vague; about 1.7-2.7 s per intro |
+| SmolLM2-135M-Instruct | 137 MB | 2 / 7 | one accepted intro was wrong; in an earlier run it invented a URL (caught) |
+| Qwen2.5-0.5B-Instruct | 512 MB | 2 / 7 | decent when accepted, but slower and wordy |
+
+This is a small sample (9 issues: angry all-caps, long log, vague, unrelated and a prompt-injection
+attempt), not a benchmark. In it, no model followed the injected instructions. Greedy decoding is
+used (no randomness): the same input gave the same output on repeated runs.
+
+Change the model with the repo variable `AI_MODEL`. Settings are per model family: `min_new_tokens`
+fixed empty outputs from SmolLM2 but made Qwen ramble, so it is only applied to SmolLM2 (`ai.mjs`).
+
+## Speed (measured on GitHub, demo branch)
+
+- `suggest` job: about 9-15 s in total.
+- AI job with warm caches: about 22-27 s (cache restore ~5 s, runtime install 4-7 s, model load ~1 s,
+  generation ~1-2 s). The first run downloaded the models and was only a few seconds slower.
+- The two jobs are separate, so the AI job cannot delay the plain suggestion or your version question.
+- Not measured: the real delay from "issue opened" to "comment posted" on a live issue
+  (Issues are disabled on the fork). The `suggest` summary prints it for real issues.
+
+## Cost
+
+Free on a public repository. A private repository counts the minutes against its quota
+(about one minute per issue for the AI job).
+
+## Safety summary
+
+- Issue text and feed content are untrusted. Issue text reaches scripts only through environment
+  variables, never a shell command or URL.
+- Links are posted only if `https` and on the feed's own host (extra hosts: `DOCS_ALLOWED_HOSTS`).
+- Titles are escaped (no pings, no markdown or HTML injection).
+- Every problem (feed down, model fails, bad output, timeout) leaves the plain comment alone;
+  nothing here can fail the issue bot.
 
 ## Try it
 
-Locally (Termux, Linux, anywhere with Node 18+):
-
 ```sh
-node --test docs-suggester/suggest.test.js          # 16 tests, offline
-node docs-suggester/suggest.js \
-  --title "php2shell vulnerability and managed rules" \
-  --body  "do WAF rules protect us?"                # live feed, prints scores + timings
+node --test docs-suggester/suggest.test.js docs-suggester/intro.test.js   # 48 tests, offline, no model
+node docs-suggester/suggest.js --feed https://wiki.psbdx.com/api/v1/posts \
+  --title "Orbot proxy mode only" --body ""                                # live check (no AI)
 ```
 
-Useful options: `--feed URL`, `--feed-file path.xml` (offline), `--min-score N`,
-`--min-terms N`, `--json-out f.json`, `--md-out comment.md`, `--summary file.md`.
+The model step needs the model runtime and only runs in the workflow. Pushing to the
+`demo/docs-suggester` branch runs the tests, a live check, and a comparison of the three models
+on the sample issues (`eval-issues.json`). Open the run, then **Summary**.
 
-On GitHub: pushing to the `demo/docs-suggester` branch runs the tests and a
-live-feed check. Open the run, then **Summary**: it shows timings for each step,
-what the matcher saw, and the comment it would post. After merging into the default
-branch you can also use **Actions -> Docs Suggester (Demo) -> Run workflow** with your
-own title and body.
+## Using it for real
 
-## Timing
-
-The job summary reports, per run: fetch, parse + index, match, and script total.
-For real issues it also reports **issue created -> now**, which includes runner
-start-up, so you get the real reply delay your users see. The script itself is
-fast; almost all of the time is the network fetch plus GitHub starting the runner.
-This job runs in parallel with the fast job, so it cannot slow down the version question.
-
-## Use your own feed
-
-Anything that serves RSS 2.0 or Atom works. To get good matches, make each page's
-feed entry carry:
-
-- a clear **title**
-- a one-sentence **description** that uses the words users would type
-- **categories/tags**: error strings the page solves (`UnknownHostException`,
-  `port 853`), device brands, modes (`DNS Server Mode`)
-
-Set the feed URL with the repo variable `DOCS_FEED_URL` (Settings -> Secrets and
-variables -> Actions -> Variables). If your docs are on another host than the feed,
-add it with `DOCS_ALLOWED_HOSTS`.
-
-### Curate `synonyms.json`
-
-Each line maps a word to a shared meaning (`"battery": ["drain", ...]`) so "drains"
-finds the battery page. Be careful: **ambiguous words create false matches.** While
-testing against a real feed, "hot", "power", "charge" and "language" all matched
-unrelated posts ("off the hot path", "powerful", "free of charge", "programming
-language") and were removed. Test new synonyms against your real feed before keeping them.
+1. Merge `docs-suggester/` and `.github/workflows/docs-suggester-demo.yml` into the default branch
+   (issue events only use the workflow from the default branch) and remove the demo `push` trigger.
+2. Set `DOCS_FEED_URL` (and `AI_MODEL` if you do not want the default).
+3. Check the comment edit works on a real issue. That part (posting, then editing the comment) is
+   covered by the workflow but has not been exercised on a live issue yet.
 
 ## Limits
 
 - It finds your pages; it cannot reason about a bug nobody documented.
-- English keyword stemming only. Bengali text is tokenized but not stemmed, and
-  romanized Bengali ("ami app khulte parchi na") will match poorly.
-- The best next step for meaning-based matching is a second, separate job that
-  uses a small free embedding model. It is intentionally not part of this demo.
+- English keyword stemming only. Romanized Bengali ("ami app khulte parchi na") will match poorly.
+- Small models are brittle: expect some issues to get the plain comment without the AI line.
+- Intros can be generic ("need some guidance"). They are checked for being grounded, not for being good.
