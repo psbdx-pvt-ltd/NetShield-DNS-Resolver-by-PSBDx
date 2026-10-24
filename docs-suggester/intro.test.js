@@ -220,3 +220,10 @@ test("REGRESSION: a fabricated URL and a vague invented summary from the real 13
   assert.equal(I.composeIntro(" trying to switch to a different version of the same application. You can try switching by following this link: https://www.orobot-socsonlines.com/e"), "It sounds like you're trying to switch to a different version of the same application. The pages below may help.");
   assert.equal(I.validateIntro(I.composeIntro(" trying to switch to a different version of the same application."), ctx).ok, false);
 });
+
+test("ai.mjs: min_new_tokens is applied to SmolLM2 only (it broke Qwen in the real comparison)", async () => {
+  const { minTokensFor } = await import("./ai.mjs");   // does not load the model runtime
+  assert.equal(minTokensFor("HuggingFaceTB/SmolLM2-360M-Instruct"), 4);
+  assert.equal(minTokensFor("HuggingFaceTB/SmolLM2-135M-Instruct"), 4);
+  assert.equal(minTokensFor("onnx-community/Qwen2.5-0.5B-Instruct"), 0);
+});

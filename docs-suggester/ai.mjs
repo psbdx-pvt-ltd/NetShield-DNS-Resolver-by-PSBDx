@@ -15,14 +15,19 @@ export async function loadGenerator(model, dtype, cacheDir) {
 }
 
 // The code writes the opening; the model only continues it (greedy, no randomness).
-export async function writeIntro(generator, { title, body, suggestions }, maxMs = 150000) {
+// Measured on GitHub runners (transformers.js 3.8.1): SmolLM2 sometimes ended its text immediately after
+// the opening, and min_new_tokens fixed that. The same setting made Qwen2.5-0.5B ramble ("I'm sorry to
+// say..." repeated), so it is applied per model family, not globally.
+export const minTokensFor = (model) => (/smollm2/i.test(model) ? 4 : 0);
+
+export async function writeIntro(generator, { title, body, suggestions }, maxMs = 150000, minNewTokens = 0) {
   const messages = intro.buildMessages(title, body, suggestions);
   const prompt = generator.tokenizer.apply_chat_template(messages, { tokenize: false, add_generation_prompt: true }) + intro.PREFIX;
   const t = performance.now();
   let timer;
   try {
     const gen = await Promise.race([
-      generator(prompt, { max_new_tokens: 48, min_new_tokens: 4, do_sample: false, repetition_penalty: 1.1, return_full_text: false }),
+      generator(prompt, { max_new_tokens: 48, ...(minNewTokens ? { min_new_tokens: minNewTokens } : {}), do_sample: false, repetition_penalty: 1.1, return_full_text: false }),
       new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`generation took longer than ${maxMs / 1000}s`)), maxMs); }),
     ]);
     let cont = String((gen && gen[0] && gen[0].generated_text) || "");

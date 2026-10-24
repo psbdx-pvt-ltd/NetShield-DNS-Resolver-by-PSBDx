@@ -15,7 +15,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
-import { loadGenerator, writeIntro, judge } from "./ai.mjs";
+import { loadGenerator, writeIntro, judge, minTokensFor } from "./ai.mjs";
 
 const require = createRequire(import.meta.url);
 const intro = require("./intro.js");
@@ -75,7 +75,7 @@ function finish() {
     } else {
       const { generator, loadMs } = await loadGenerator(MODEL, DTYPE, env.HF_CACHE_DIR);
       out.timings.loadMs = loadMs;
-      const g = await writeIntro(generator, ctx, MAX_GEN_MS);
+      const g = await writeIntro(generator, ctx, MAX_GEN_MS, minTokensFor(MODEL));
       out.raw = g.raw;
       out.timings.genMs = g.genMs;
     }

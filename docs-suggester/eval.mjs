@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { loadGenerator, writeIntro, judge } from "./ai.mjs";
+import { loadGenerator, writeIntro, judge, minTokensFor } from "./ai.mjs";
 
 const require = createRequire(import.meta.url);
 const S = require("./suggest.js");
@@ -34,7 +34,7 @@ const one = (s) => String(s || "").replace(/\s+/g, " ").trim();
         else {
           const ctx = { title: it.title, body: bodyPart, suggestions: r.suggestions };
           try {
-            const g = await writeIntro(generator, ctx);
+            const g = await writeIntro(generator, ctx, 150000, minTokensFor(MODEL));
             const j = judge(g.raw, ctx);
             Object.assign(row, { genMs: g.genMs, raw: g.raw, used: j.ok ? "ai" : "fallback", text: j.text, reason: j.reason });
           } catch (e) { row.used = "error"; row.reason = e.message; }
