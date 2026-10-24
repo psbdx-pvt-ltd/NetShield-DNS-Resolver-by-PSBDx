@@ -123,16 +123,17 @@ const T = "Getting UnknownHostException on mobile data";
 const B = "Android 14 and the app shows EAI_NODATA, nothing resolves on mobile data at all.";
 
 test("personalize: good model output becomes an intro above code-made links, with a disclosure note", async () => {
-  const { j, md, code } = await runPersonalize({ title: T, body: B, fake: "Sorry to hear the app shows EAI_NODATA on mobile data. The troubleshooting guide below may help." });
+  const { j, md, code } = await runPersonalize({ title: T, body: B, fake: " having trouble because the app shows EAI_NODATA on mobile data." });
   assert.equal(code, 0);
   assert.equal(j.used, "ai");
-  assert.ok(md.indexOf("Sorry to hear") < md.indexOf("1. ["));
+  assert.ok(md.indexOf("It sounds like you're having trouble") < md.indexOf("1. ["));
+  assert.match(md, /The pages below may help\./);
   assert.match(md, /\(https:\/\/wiki\.psbdx\.com\/wiki\//);
   assert.match(md, /small AI model/);
 });
 
 test("personalize: a model output with a link is rejected and NO comment file is produced", async () => {
-  const { j, md, code } = await runPersonalize({ title: T, body: B, fake: "The EAI_NODATA fix is at evil.example.net/x for sure." });
+  const { j, md, code } = await runPersonalize({ title: T, body: B, fake: " having trouble, see evil.example.net/x for the fix." });
   assert.equal(code, 0);
   assert.equal(j.used, "fallback");
   assert.match(j.reason, /rejected/);
@@ -152,4 +153,29 @@ test("personalize: when the matcher found nothing, there is nothing to personali
   assert.equal(nm.j.used, "none");
   assert.match(nm.j.reason, /no suggestion/);
   assert.equal(nm.md, null);
+});
+
+/* ---------------- regressions from the REAL first GitHub run ---------------- */
+test("REGRESSION: the real SmolLM2-135M output that slipped through (invented story, third person) is now rejected", () => {
+  const real = "The user has described a problem with their mobile data connection. They have tried to resolve this issue by using a third-party solution like NetShield DNS Resolver, but they haven't been able to get a resolution from it.";
+  const ctx = { title: "Getting UnknownHostException on mobile data", body: "Android 14. The app shows EAI_NODATA and nothing resolves when I use mobile data.", suggestions: [{ title: "NetShield DNS Resolver — Troubleshooting Guide (EAI_NODATA & Connectivity)" }] };
+  const r = I.validateIntro(real, ctx);
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /third person|not in the issue/);
+  const composed = I.composeIntro(" described a problem with their mobile data connection. They have tried to resolve this.");
+  assert.equal(I.validateIntro(composed, ctx).ok, false);
+});
+
+test("composeIntro: fixed second-person opening, one model sentence, fixed closing; glued domains and cut-offs give nothing", () => {
+  assert.equal(I.composeIntro(" having trouble with mobile data. And a second sentence. And more."), "It sounds like you're having trouble with mobile data. The pages below may help.");
+  assert.equal(I.composeIntro(" having trouble!!"), "It sounds like you're having trouble. The pages below may help.");
+  assert.equal(I.composeIntro(" having trouble, see evil.com/x for"), "");
+  assert.equal(I.composeIntro(" having trouble with mobile data"), "");
+  assert.equal(I.composeIntro(""), "");
+});
+
+test("grounding: invented details are rejected, restating the issue is accepted", () => {
+  const ctx = { title: "Getting UnknownHostException on mobile data", body: "Android 14. The app shows EAI_NODATA and nothing resolves when I use mobile data.", suggestions: [{ title: "Troubleshooting Guide" }] };
+  assert.equal(I.validateIntro(I.composeIntro(" using a corporate firewall with custom certificates installed."), ctx).ok, false);
+  assert.ok(I.validateIntro(I.composeIntro(" having trouble because the app shows EAI_NODATA on mobile data."), ctx).ok);
 });

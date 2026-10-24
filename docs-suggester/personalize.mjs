@@ -54,7 +54,7 @@ function finish() {
   if (opt("out")) fs.writeFileSync(opt("out"), JSON.stringify(out, null, 2));
   if (opt("md-out") && out.comment) fs.writeFileSync(opt("md-out"), out.comment);
   if (opt("summary")) fs.appendFileSync(opt("summary"), summary());
-  console.log(JSON.stringify({ used: out.used, reason: out.reason, model: out.model, dtype: out.dtype, timings: out.timings, text: out.text }, null, 2));
+  console.log(JSON.stringify({ used: out.used, reason: out.reason, model: out.model, dtype: out.dtype, timings: out.timings, text: out.text, raw: String(out.raw || "").slice(0, 300) }, null, 2));
   process.exit(0); // onnxruntime keeps worker threads alive; never let them hang the job
 }
 
@@ -79,17 +79,22 @@ function finish() {
       out.timings.loadMs = Math.round(performance.now() - tLoad);
 
       const messages = intro.buildMessages(title, bodyPart, result.suggestions);
+      // the code writes the opening; the model only continues it
+      const prompt = generator.tokenizer.apply_chat_template(messages, { tokenize: false, add_generation_prompt: true }) + intro.PREFIX;
       const tGen = performance.now();
       const gen = await Promise.race([
-        generator(messages, { max_new_tokens: 72, do_sample: false, repetition_penalty: 1.1 }),
+        generator(prompt, { max_new_tokens: 48, do_sample: false, repetition_penalty: 1.1, return_full_text: false }),
         new Promise((_, rej) => setTimeout(() => rej(new Error(`generation took longer than ${MAX_GEN_MS / 1000}s`)), MAX_GEN_MS)),
       ]);
       out.timings.genMs = Math.round(performance.now() - tGen);
-      const g = gen && gen[0] && gen[0].generated_text;
-      out.raw = String(Array.isArray(g) ? ((g[g.length - 1] || {}).content || "") : g || "");
+      let cont = String((gen && gen[0] && gen[0].generated_text) || "");
+      if (cont.startsWith(prompt)) cont = cont.slice(prompt.length);
+      out.raw = cont;
     }
 
-    const verdict = intro.validateIntro(out.raw, { title, body: bodyPart, suggestions: result.suggestions });
+    const composed = intro.composeIntro(out.raw);
+    if (!composed) { out.used = "fallback"; out.reason = "output rejected: no complete sentence (output was cut off or contained a glued domain)"; return finish(); }
+    const verdict = intro.validateIntro(composed, { title, body: bodyPart, suggestions: result.suggestions });
     if (!verdict.ok) { out.used = "fallback"; out.reason = `output rejected: ${verdict.reason}`; return finish(); }
 
     out.used = "ai";
